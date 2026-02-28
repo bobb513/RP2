@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RailFab Pro v2.0 - Shop Tool</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        :root { --primary: #007aff; --danger: #d32f2f; --pdf-btn: #28a745; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: #f0f2f5; padding: 15px; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 650px; margin: auto; }
+        h2 { color: #1a1a1a; border-bottom: 3px solid var(--primary); display: inline-block; margin-top: 0; }
+        .input-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 10px; }
+        label { display: block; font-weight: 600; font-size: 0.85em; color: #444; margin-bottom: 4px; }
+        input, select { width: 100%; padding: 12px; border: 1px solid #ced4da; border-radius: 6px; box-sizing: border-box; }
+        .toggle-container { display: flex; align-items: center; margin-top: 20px; background: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px dashed #ccc; }
+        .btn-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 20px; }
+        button { padding: 16px; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 0.8em; }
+        .btn-calc { background: var(--primary); }
+        .btn-print { background: #6c757d; }
+        .btn-pdf { background: var(--pdf-btn); }
+        
+        .results { margin-top: 25px; display: none; padding: 10px; }
+        .channel-stats { display: flex; justify-content: space-around; margin-bottom: 15px; }
+        .stat-box { text-align: center; background: #fff; border: 1px solid #eee; padding: 10px; border-radius: 8px; flex: 1; margin: 0 5px; }
+        .val { color: var(--danger); font-weight: bold; display: block; font-size: 1.2em; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; }
+        th { background: #f8f9fa; text-align: left; padding: 12px; border-bottom: 2px solid #dee2e6; }
+        td { padding: 10px; border-bottom: 1px solid #f1f1f1; font-family: monospace; }
+        .shop-notes-area { margin-top: 30px; border-top: 2px solid #eee; padding-top: 15px; }
+        textarea { width: 100%; height: 80px; padding: 10px; border: 1px solid #ddd; border-radius: 6px; resize: none; margin-top: 5px; }
+
+        /* Print styling remains for manual Ctrl+P */
+        @media print {
+            .btn-group, .toggle-container, .input-grid, label, input, select { display: none !important; }
+            .card { box-shadow: none; border: none; }
+            .results { display: block !important; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="card" id="capture-area">
+    <h2>Fabrication Engine</h2>
+    
+    <div class="input-grid">
+        <div>
+            <label>Opening (Inside-to-Inside)</label>
+            <input type="number" id="opening" placeholder="Inches" step="0.0625">
+        </div>
+        <div>
+            <label>Railing Type</label>
+            <select id="railType" onchange="toggleStair()">
+                <option value="level">Level Section</option>
+                <option value="stair">Stair Section</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="stairInputs" style="display:none;" class="input-grid">
+        <div><label>Rise</label><input type="number" id="rise" step="0.0625"></div>
+        <div><label>Run</label><input type="number" id="run" step="0.0625"></div>
+    </div>
+
+    <div class="toggle-container">
+        <input type="checkbox" id="symmetry" style="width:auto; margin-right:10px;">
+        <label for="symmetry" style="margin:0;">Balanced Symmetry</label>
+    </div>
+
+    <div class="btn-group">
+        <button class="btn-calc" onclick="calculate()">CALCULATE</button>
+        <button class="btn-print" onclick="window.print()">PRINT</button>
+        <button class="btn-pdf" onclick="saveAsPDF()">SAVE PDF</button>
+    </div>
+
+    <div id="results" class="results">
+        <div class="channel-stats">
+            <div class="stat-box">Channel B (Bottom) <span class="val" id="chanB"></span></div>
+            <div class="stat-box">Channel A (Top) <span class="val" id="chanA"></span></div>
+        </div>
+        
+        <table id="layoutTable">
+            <thead>
+                <tr><th>#</th><th>Bottom (B)</th><th>Top (A)</th></tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+        </table>
+
+        <div class="shop-notes-area">
+            <label>Fabrication Notes:</label>
+            <textarea id="notesBox" placeholder="Job name, welder, or field adjustments..."></textarea>
+        </div>
+    </div>
+</div>
+
+<script>
+    function toggleStair() {
+        document.getElementById('stairInputs').style.display = 
+            document.getElementById('railType').value === 'stair' ? 'grid' : 'none';
+    }
+
+    function toFrac(dec) {
+        const whole = Math.floor(dec);
+        const fraction = dec - whole;
+        const precision = 16;
+        const num = Math.round(fraction * precision);
+        if (num === 0) return whole + '"';
+        if (num === precision) return (whole + 1) + '"';
+        const gcd = (a, b) => b ? gcd(b, a % b) : a;
+        const common = gcd(num, precision);
+        return `${whole > 0 ? whole + ' ' : ''}${num/common}/${precision/common}"`;
+    }
+
+    function calculate() {
+        const op = parseFloat(document.getElementById('opening').value);
+        if (isNaN(op)) return;
+
+        const pSize = 0.75;
+        const maxGap = 4.0;
+        let slope = op;
+        const isStair = document.getElementById('railType').value === 'stair';
+
+        if (isStair) {
+            const rise = parseFloat(document.getElementById('rise').value);
+            const run = parseFloat(document.getElementById('run').value);
+            slope = Math.sqrt(Math.pow(rise, 2) + Math.pow(run, 2));
+        }
+
+        const numPickets = Math.ceil((slope - pSize) / (maxGap + pSize));
+        const spacingOC = slope / (numPickets + 1);
+
+        document.getElementById('chanB').innerText = toFrac(slope);
+        document.getElementById('chanA').innerText = toFrac(slope - 0.125);
+
+        let tableHtml = "";
+        for (let i = 1; i <= numPickets; i++) {
+            let markB = i * spacingOC;
+            let markA = isStair ? (markB + 0.1875) : markB;
+            tableHtml += `<tr><td>${i}</td><td>${toFrac(markB)}</td><td>${toFrac(markA)}</td></tr>`;
+        }
+        document.getElementById('tableBody').innerHTML = tableHtml;
+        document.getElementById('results').style.display = 'block';
+    }
+
+    function saveAsPDF() {
+        const element = document.getElementById('capture-area');
+        const opt = {
+            margin:       0.5,
+            filename:     'Shop-Layout-Ticket.pdf',
+            image:        { type: 'jpeg', quality: 0.98 },
+            html2canvas:  { scale: 2, useCORS: true },
+            jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
+        };
+        // Temporarily hide buttons for the PDF capture
+        document.querySelector('.btn-group').style.display = 'none';
+        
+        html2pdf().set(opt).from(element).save().then(() => {
+            // Restore buttons after PDF is generated
+            document.querySelector('.btn-group').style.display = 'grid';
+        });
+    }
+</script>
+</body>
+</html>
